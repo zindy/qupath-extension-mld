@@ -97,7 +97,16 @@ public class MldTools {
                         points.add(transformer.transform(raw.getX(), raw.getY()));
                     }
 
-                    if (points.size() < 3 && obj.shapeType == POLYGON) continue;
+                    // Skip objects with insufficient points
+                    if (points.isEmpty()) {
+                        logger.debug("Skipping object with no points");
+                        continue;
+                    }
+                    
+                    if (points.size() < 3 && obj.shapeType == POLYGON) {
+                        logger.debug("Skipping polygon with fewer than 3 points");
+                        continue;
+                    }
 
                     ROI roi = ROIs.createPolygonROI(points, null);
                     
@@ -342,11 +351,20 @@ public class MldTools {
         else if (shape == RECTANGLE) readRect(buf, obj);
         else if (shape == SQUARE) readSquare(buf, obj);
         else if (shape == ELLIPSE) readEllipse(buf, obj);
-        else return;
+        else {
+            logger.debug("Skipping unsupported shape type: {}", shape);
+            return;
+        }
 
         obj.text = readString(buf);
         obj.additional = readString(buf);
-        layer.objects.add(obj);
+        
+        // Only add objects that have valid points
+        if (!obj.xPoints.isEmpty()) {
+            layer.objects.add(obj);
+        } else {
+            logger.debug("Skipping object with no points after parsing");
+        }
     }
 
     private static void readPoly(ByteBuffer buf, MldObject obj) {
@@ -364,18 +382,24 @@ public class MldTools {
 
     private static void readRect(ByteBuffer buf, MldObject obj) {
         buf.getInt(); double x = buf.getDouble(), y = buf.getDouble(), w = buf.getDouble(), h = buf.getDouble(), ang = buf.getDouble();
-        double[] xo = {0, 2 * w, 2 * w, 0, 0}; double[] yo = {0, 0, 2 * h, 2 * h, 0};
+        double[] xo = {-w , w, w, -w, -w}; 
+        double[] yo = {-h, -h, h, h, -h};
         for (int i = 0; i < 5; i++) {
-            obj.addPoint(xo[i] * Math.cos(ang) - yo[i] * Math.sin(ang) + x - w,
-                         xo[i] * Math.sin(ang) + yo[i] * Math.cos(ang) + y - h);
+            obj.addPoint(xo[i] * Math.cos(ang) - yo[i] * Math.sin(ang) + x,
+                         xo[i] * Math.sin(ang) + yo[i] * Math.cos(ang) + y);
         }
     }
     
     private static void readSquare(ByteBuffer buf, MldObject obj) {
-        buf.getInt(); double x = buf.getDouble(), y = buf.getDouble(), w = buf.getDouble(), ang = buf.getDouble();
-        double[] xo = {0, w, w, 0, 0}; double[] yo = {0, 0, w, w, 0};
+        buf.getInt(); 
+        double x = buf.getDouble(), y = buf.getDouble(), w = buf.getDouble(), ang = buf.getDouble();
+        double[] xo = {-w , w, w, -w, -w}; 
+        double[] yo = {-w, -w, w, w, -w};
         for (int i = 0; i < 5; i++) {
-            obj.addPoint(xo[i] * Math.cos(ang) + x, yo[i] * Math.sin(ang) + y);
+            obj.addPoint(
+                xo[i] * Math.cos(ang) - yo[i] * Math.sin(ang) + x,
+                xo[i] * Math.sin(ang) + yo[i] * Math.cos(ang) + y
+            );
         }
     }
 
