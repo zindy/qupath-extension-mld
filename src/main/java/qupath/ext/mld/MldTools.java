@@ -65,115 +65,128 @@ public class MldTools {
 
         logger.info("Reading MLD file: {}", mldFile.getAbsolutePath());
 
+        var hierarchy = imageData.getHierarchy();
+        List<PathObject> newObjects = new ArrayList<>();
+
         try {
-            // 2. Parse the MLD Binary
+            // Parse the MLD Binary
             MldData mldData = readMldBinary(mldFile);
+            newObjects = convertMldToPathObjects(mldData, server);
 
-            // 3. Setup Coordinate Transformer
-            VisiopharmTransformer transformer;
-            if (mldData.imageInfoXml != null && !mldData.imageInfoXml.isEmpty()) {
-                logger.info("Using MLD embedded ImageInfo for coordinates.");
-                transformer = new VisiopharmTransformer(mldData.imageInfoXml, server);
-            } else {
-                logger.info("Using Server Metadata (Hamamatsu offsets) for coordinates.");
-                transformer = new VisiopharmTransformer(server);
-            }
-
-            // 4. Parse Class Names
-            Map<String, Map<Integer, String>> classMap = parseLayerConfigs(mldData.layerConfigsXml);
-
-            // 5. Convert and Add Objects
-            var hierarchy = imageData.getHierarchy();
-            List<PathObject> newObjects = new ArrayList<>();
-
-            for (MldLayer layer : mldData.layers) {
-                boolean isDetectionLayer = layer.name.equalsIgnoreCase("Label");
-                List<PathAnnotationObject> layerSolids = new ArrayList<>();
-                List<ROI> layerHoles = new ArrayList<>();
-
-                for (MldObject obj : layer.objects) {
-                    List<Point2> points = new ArrayList<>();
-                    for (Point2 raw : obj.getPoints()) {
-                        points.add(transformer.transform(raw.getX(), raw.getY()));
-                    }
-
-                    // Skip objects with insufficient points
-                    if (points.isEmpty()) {
-                        logger.debug("Skipping object with no points");
-                        continue;
-                    }
-                    
-                    if (points.size() < 3 && obj.shapeType == POLYGON) {
-                        logger.debug("Skipping polygon with fewer than 3 points");
-                        continue;
-                    }
-
-                    ROI roi = ROIs.createPolygonROI(points, null);
-                    
-                    // Handle Holes
-                    if (obj.type == 0) {
-                        layerHoles.add(roi);
-                        continue;
-                    }
-
-                    // Create PathObject (Fix: Use constructors instead of factory methods)
-                    PathObject pathObj;
-                    if (isDetectionLayer) {
-                        pathObj = PathObjects.createDetectionObject(roi);
-                    } else {
-                        pathObj = PathObjects.createAnnotationObject(roi);
-                    }
-
-                    if (obj.text != null && !obj.text.isEmpty()) pathObj.setName(obj.text);
-                    
-                    String className = classMap.getOrDefault(layer.name, new HashMap<>())
-                            .getOrDefault(obj.type, "Type " + obj.type);
-                    
-                    if (className != null && !className.isEmpty()) {
-                        pathObj.setPathClass(PathClassFactory.getPathClass(className));
-                    }
-
-                    if (pathObj instanceof PathAnnotationObject) {
-                        layerSolids.add((PathAnnotationObject) pathObj);
-                    } else {
-                        newObjects.add(pathObj);
-                    }
-                }
-
-                // Geometry Subtraction
-                if (!layerHoles.isEmpty() && !layerSolids.isEmpty()) {
-                    for (ROI holeRoi : layerHoles) {
-                        Geometry holeGeom = holeRoi.getGeometry();
-                        for (PathAnnotationObject parent : layerSolids) {
-                            Geometry parentGeom = parent.getROI().getGeometry();
-                            if (parentGeom.covers(holeGeom)) {
-                                try {
-                                    Geometry diff = parentGeom.difference(holeGeom);
-                                    parent.setROI(GeometryTools.geometryToROI(diff, parent.getROI().getImagePlane()));
-                                    break; 
-                                } catch (Exception e) {
-                                    logger.warn("Error subtracting hole", e);
-                                }
-                            }
-                        }
-                    }
-                }
-                newObjects.addAll(layerSolids);
-            }
-
-            // Fix: Use addObjects instead of addPathObjects
             hierarchy.addObjects(newObjects);
             
             // Resolve hierarchy to establish parent-child relationships
-            hierarchy.resolveHierarchy();            
-
+            hierarchy.resolveHierarchy();
+            
             return true;
-
 
         } catch (Exception e) {
             logger.error("Failed to read MLD file", e);
             return false;
         }
+    }
+
+    /**
+     * Convert MldData to PathObjects without adding them to the hierarchy
+     * Useful for custom processing before adding to image
+     *
+     * @param mldData The parsed MLD data
+     * @param server The image server for coordinate transformation
+     * @return List of PathObjects ready to be added to hierarchy
+     */
+    public static List<PathObject> convertMldToPathObjects(MldData mldData, ImageServer<?> server) {
+        // 3. Setup Coordinate Transformer
+        VisiopharmTransformer transformer;
+        if (mldData.imageInfoXml != null && !mldData.imageInfoXml.isEmpty()) {
+            logger.info("Using MLD embedded ImageInfo for coordinates.");
+            transformer = new VisiopharmTransformer(mldData.imageInfoXml, server);
+        } else {
+            logger.info("Using Server Metadata (Hamamatsu offsets) for coordinates.");
+            transformer = new VisiopharmTransformer(server);
+        }
+
+        // 4. Parse Class Names
+        Map<String, Map<Integer, String>> classMap = parseLayerConfigs(mldData.layerConfigsXml);
+
+        // 5. Convert and Add Objects
+        List<PathObject> newObjects = new ArrayList<>();
+
+        for (MldLayer layer : mldData.layers) {
+            boolean isDetectionLayer = layer.name.equalsIgnoreCase("Label");
+            List<PathAnnotationObject> layerSolids = new ArrayList<>();
+            List<ROI> layerHoles = new ArrayList<>();
+
+            for (MldObject obj : layer.objects) {
+                List<Point2> points = new ArrayList<>();
+                for (Point2 raw : obj.getPoints()) {
+                    points.add(transformer.transform(raw.getX(), raw.getY()));
+                }
+
+                // Skip objects with insufficient points
+                if (points.isEmpty()) {
+                    logger.debug("Skipping object with no points");
+                    continue;
+                }
+                
+                if (points.size() < 3 && obj.shapeType == POLYGON) {
+                    logger.debug("Skipping polygon with fewer than 3 points");
+                    continue;
+                }
+
+                ROI roi = ROIs.createPolygonROI(points, null);
+                
+                // Handle Holes
+                if (obj.type == 0) {
+                    layerHoles.add(roi);
+                    continue;
+                }
+
+                // Create PathObject (Fix: Use constructors instead of factory methods)
+                PathObject pathObj;
+                if (isDetectionLayer) {
+                    pathObj = PathObjects.createDetectionObject(roi);
+                } else {
+                    pathObj = PathObjects.createAnnotationObject(roi);
+                }
+
+                if (obj.text != null && !obj.text.isEmpty()) pathObj.setName(obj.text);
+                
+                String className = classMap.getOrDefault(layer.name, new HashMap<>())
+                        .getOrDefault(obj.type, "Type " + obj.type);
+                
+                if (className != null && !className.isEmpty()) {
+                    pathObj.setPathClass(PathClassFactory.getPathClass(className));
+                }
+
+                if (pathObj instanceof PathAnnotationObject) {
+                    layerSolids.add((PathAnnotationObject) pathObj);
+                } else {
+                    newObjects.add(pathObj);
+                }
+            }
+
+            // Geometry Subtraction
+            if (!layerHoles.isEmpty() && !layerSolids.isEmpty()) {
+                for (ROI holeRoi : layerHoles) {
+                    Geometry holeGeom = holeRoi.getGeometry();
+                    for (PathAnnotationObject parent : layerSolids) {
+                        Geometry parentGeom = parent.getROI().getGeometry();
+                        if (parentGeom.covers(holeGeom)) {
+                            try {
+                                Geometry diff = parentGeom.difference(holeGeom);
+                                parent.setROI(GeometryTools.geometryToROI(diff, parent.getROI().getImagePlane()));
+                                break; 
+                            } catch (Exception e) {
+                                logger.warn("Error subtracting hole", e);
+                            }
+                        }
+                    }
+                }
+            }
+            newObjects.addAll(layerSolids);
+        }
+
+        return newObjects;
     }
     
     /**
@@ -274,7 +287,7 @@ public class MldTools {
         }
     }
 
-    private static MldData readMldBinary(File file) throws IOException {
+    public static MldData readMldBinary(File file) throws IOException {
         byte[] bytes = Files.readAllBytes(file.toPath());
         ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         MldData data = new MldData();
@@ -299,6 +312,7 @@ public class MldTools {
                     byte[] rest = new byte[buf.remaining()]; buf.get(rest);
                     String s = new String(rest, StandardCharsets.UTF_8);
                     if (s.contains("LDFF")) s = s.substring(0, s.lastIndexOf("LDFF"));
+
                     data.imageInfoXml = s;
                 }
             }
@@ -426,7 +440,29 @@ public class MldTools {
         return map; 
     }
 
-    static class MldData { List<MldLayer> layers = new ArrayList<>(); String layerConfigsXml; String imageInfoXml; }
+    //static class MldData { List<MldLayer> layers = new ArrayList<>(); String layerConfigsXml; String imageInfoXml; }
+    public static class MldData { 
+        public List<MldLayer> layers = new ArrayList<>();
+        public String layerConfigsXml;
+        public String imageInfoXml;
+        
+        /**
+         * Get the ImageInfo XML if embedded in the MLD file
+         * @return XML string or null if not present
+         */
+        public String getImageInfoXml() {
+            return imageInfoXml;
+        }
+        
+        /**
+         * Get the LayerConfigs XML if embedded in the MLD file
+         * @return XML string or null if not present
+         */
+        public String getLayerConfigsXml() {
+            return layerConfigsXml;
+        }
+    }
+
     static class MldLayer { String name; List<MldObject> objects = new ArrayList<>(); }
     static class MldObject { 
         int shapeType, type; String text, additional; 
@@ -443,8 +479,8 @@ public class MldTools {
         double scaleX, scaleY, offsetX, offsetY;
 
         VisiopharmTransformer(String xml, ImageServer<?> server) {
-            double left = extractXmlVal(xml, "Left");
-            double top = extractXmlVal(xml, "Top");
+            double left = extractXmlDouble(xml, "Left");
+            double top = extractXmlDouble(xml, "Top");
             
             var cal = server.getPixelCalibration();
             double pxW = cal.getPixelWidthMicrons();
@@ -475,12 +511,57 @@ public class MldTools {
         Point2 transform(double x, double y) {
             return new Point2(x * scaleX + offsetX, y * scaleY + offsetY);
         }
+    }
         
-        private double extractXmlVal(String xml, String tag) {
-            try {
-                String s = xml.split("<" + tag + ">")[1].split("</" + tag + ">")[0];
-                return Double.parseDouble(s);
-            } catch(Exception e) { return 0.0; }
+    /**
+     * Extract image path from MLD ImageInfo XML
+     *
+     * @param mldData The parsed MLD data
+     * @return Image path string, or null if not found
+     */
+    public static String getImagePathFromMld(MldData mldData) {
+        if (mldData.imageInfoXml == null || mldData.imageInfoXml.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            return extractXmlValue(mldData.imageInfoXml, "ImagePath");
+        } catch (Exception e) {
+            logger.warn("Failed to extract ImagePath from MLD", e);
+            return null;
+        }
+    }
+
+    /**
+     * Extract a value from simple XML structure
+     * Helper method for parsing MLD embedded XML
+     *
+     * @param xml The XML string
+     * @param tag The tag name to extract
+     * @return The value as a string, or null if not found
+     */
+    public static String extractXmlValue(String xml, String tag) {
+        try {
+            String s = xml.split("<" + tag + ">")[1].split("</" + tag + ">")[0];
+            return s.trim();
+        } catch(Exception e) { 
+            return null;
+        }
+    }
+
+    /**
+     * Extract a numeric value from simple XML structure
+     *
+     * @param xml The XML string
+     * @param tag The tag name to extract
+     * @return The value as a double, or 0.0 if not found
+     */
+    public static double extractXmlDouble(String xml, String tag) {
+        try {
+            String s = extractXmlValue(xml, tag);
+            return s != null ? Double.parseDouble(s) : 0.0;
+        } catch(Exception e) { 
+            return 0.0;
         }
     }
 }
