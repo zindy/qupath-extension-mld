@@ -13,6 +13,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import java.io.BufferedReader;
+import java.util.HashSet;
+import java.util.Set;
+
 import org.locationtech.jts.geom.Geometry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -564,4 +568,86 @@ public class MldTools {
             return 0.0;
         }
     }
+
+    /**
+     * Fast extraction of a single field from a tab-separated line.
+     * Avoids regex and String.split for performance on huge Visiopharm TSVs.
+     *
+     * @param line  One TSV line
+     * @param index 0-based column index
+     * @return The field value, or null if the column does not exist
+     */
+    public static String getTsvField(String line, int index) {
+        int start = 0;
+        int col = 0;
+        int len = line.length();
+
+        for (int i = 0; i < len; i++) {
+            if (line.charAt(i) == '\t') {
+                if (col == index)
+                    return line.substring(start, i);
+                col++;
+                start = i + 1;
+            }
+        }
+        // last column
+        return col == index ? line.substring(start) : null;
+    }    
+
+    /**
+     * Collect all unique values from a given column in a huge Visiopharm TSV file.
+     * This streams the file and is safe for multi-GB exports.
+     *
+     * @param tsvFile    Path to TSV
+     * @param columnName Name of the column (e.g. "LayerData")
+     * @return Set of unique values
+     */
+    public static Set<String> collectUniqueTsvValues(Path tsvFile, String columnName) throws IOException {
+
+        try (BufferedReader reader = Files.newBufferedReader(tsvFile, StandardCharsets.UTF_8)) {
+
+            // Read header
+            String headerLine = reader.readLine();
+            if (headerLine == null)
+                throw new IOException("Empty TSV file: " + tsvFile);
+
+            String[] headers = headerLine.split("\t", -1);
+
+            int colIndex = -1;
+            for (int i = 0; i < headers.length; i++) {
+                if (headers[i].equals(columnName)) {
+                    colIndex = i;
+                    break;
+                }
+            }
+
+            if (colIndex < 0)
+                throw new IllegalArgumentException(
+                        "Column '" + columnName + "' not found in " + tsvFile);
+
+            // Visiopharm columns like LayerData typically have very low cardinality
+            Set<String> unique = new HashSet<>(64);
+
+            String line;
+            long count = 0;
+
+            while ((line = reader.readLine()) != null) {
+                count++;
+
+                String value = getTsvField(line, colIndex);
+                if (value != null && !value.isEmpty())
+                    unique.add(value);
+
+                if ((count % 1_000_000) == 0) {
+                    logger.debug("Processed {} lines, unique {} values", count, unique.size());
+                }
+            }
+
+            logger.info("Finished reading {} ({} lines, {} unique values)", 
+                        tsvFile.getFileName(), count, unique.size());
+
+            return unique;
+        }
+    }
+
 }
