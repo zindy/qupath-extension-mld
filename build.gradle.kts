@@ -23,9 +23,6 @@ dependencies {
     shadow(libs.bundles.logging)
     shadow(libs.qupath.fxtras)
 
-    // If you aren't using Groovy, this can be removed
-    shadow(libs.bundles.groovy)
-
     // For testing
     testImplementation(libs.bundles.qupath)
     testImplementation(libs.junit)
