@@ -5,12 +5,23 @@ plugins {
     id("qupath-conventions")
 }
 
+// Get version from Environment Variable (GitHub Actions) or fallback to VERSION file
+// 1. Get the tag name from GitHub (e.g., "v1.0.3" or "v1.0.3-rc1")
+val githubTag = System.getenv("GITHUB_REF_NAME")
+
+// 2. Determine the final version string
+val releaseVersion = if (githubTag != null && githubTag.startsWith("v")) {
+    githubTag.removePrefix("v") // Use the tag (stripped of 'v')
+} else {
+    file("VERSION").readText().trim() // Fallback to your SNAPSHOT file
+}
 
 // TODO: Configure your extension here (please change the defaults!)
 qupathExtension {
     name = "qupath-extension-mld"
     group = "io.github.qupath"
-    version = "0.1.0-SNAPSHOT"
+    version = releaseVersion
+
     description = "A simple QuPath extension"
     automaticModule = "io.github.qupath.extension.mld"
 }
@@ -27,5 +38,5 @@ dependencies {
     testImplementation(libs.bundles.qupath)
     testImplementation(libs.junit)
 
-    implementation("io.github.qupath:qupath-extension-openslide:0.6.0-rc4")
+    implementation("io.github.qupath:qupath-extension-openslide:0.7.0")
 }
